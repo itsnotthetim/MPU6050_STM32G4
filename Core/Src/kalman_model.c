@@ -56,12 +56,12 @@ void KalmanFilter_Init(KalmanFilter *kf, float32_t delta_t)
     }
 
     // Process noise covariance Q
-    float32_t sigma_phi = 0.001f;
-    float32_t sigma_theta = 0.001f;
-    float32_t sigma_psi = 0.001f;
+    float32_t sigma_phi = 0.01f;
+    float32_t sigma_theta = 0.01f;
+    float32_t sigma_psi = 0.01f;
     float32_t sigma_bias_phi = 0.003f;
     float32_t sigma_bias_theta = 0.003f;
-    float32_t sigma_bias_psi = 0.003f;
+    float32_t sigma_bias_psi = 0.0003f;
     memset(kf->Q_data, 0, sizeof(kf->Q_data));
     kf->Q_data[0 * STATE_DIM + 0] = sigma_phi * sigma_phi * dt * dt;
     kf->Q_data[1 * STATE_DIM + 1] = sigma_theta * sigma_theta * dt * dt;
@@ -83,19 +83,19 @@ void KalmanFilter_Init(KalmanFilter *kf, float32_t delta_t)
     kf->H_data[5 * STATE_DIM + 2] = 1.0f;   kf->H_data[5 * STATE_DIM + 5] = -1.0f; // omega_psi
 
     // Measurement noise covariance R
-    float32_t sigma_acc_phi = 0.03f;
-    float32_t sigma_acc_theta = 0.03f;
-    float32_t sigma_mag_psi = 1000.0f; // Large value due to lack of magnetometer
-    float32_t sigma_gyro_phi = 0.02f;
-    float32_t sigma_gyro_theta = 0.02f;
-    float32_t sigma_gyro_psi = 0.02f;
+    float32_t sigma_acc_phi =  0.001209244523446859;
+    float32_t sigma_acc_theta = 0.0010572480763086421;
+    float32_t sigma_mag_psi = 0.0038762164205234486; // Large value due to lack of magnetometer
+    float32_t sigma_gyro_phi = 3.123911124369358e-06;
+    float32_t sigma_gyro_theta = 3.677361834943486e-06;
+    float32_t sigma_gyro_psi = 2.789920277006955e-06;
     memset(kf->R_data, 0, sizeof(kf->R_data));
     kf->R_data[0 * MEASUREMENT_DIM + 0] = sigma_acc_phi * sigma_acc_phi ;
     kf->R_data[1 * MEASUREMENT_DIM + 1] = sigma_acc_theta * sigma_acc_theta ;
     kf->R_data[2 * MEASUREMENT_DIM + 2] = sigma_mag_psi * sigma_mag_psi ; // High uncertainty for psi_mag
     kf->R_data[3 * MEASUREMENT_DIM + 3] = sigma_gyro_phi * sigma_gyro_phi ;
-    kf->R_data[4 * MEASUREMENT_DIM + 4] = sigma_gyro_theta * sigma_gyro_theta ;
-    kf->R_data[5 * MEASUREMENT_DIM + 5] = sigma_gyro_psi * sigma_gyro_psi ;
+    kf->R_data[4 * MEASUREMENT_DIM + 4] = sigma_gyro_theta * sigma_gyro_theta;
+    kf->R_data[5 * MEASUREMENT_DIM + 5] = sigma_gyro_psi * sigma_gyro_psi  ;
 
     // Initialize error covariance matrix P_k
     memset(kf->P_k_data, 0, sizeof(kf->P_k_data));
@@ -182,7 +182,7 @@ void KalmanFilter_Update(KalmanFilter *kf, float32_t phi_acc, float32_t theta_ac
     status = arm_mat_mult_f32(&kf->temp1, &kf->temp2, &kf->P_k); // P_k = temp1 * temp2
     status = arm_mat_add_f32(&kf->P_k, &kf->Q, &kf->P_k); // P_k = P_k + Q
 
-    // Update State
+    // Update Step
     // z_k = [phi_acc; theta_acc; psi_mag; omega_phi; omega_theta; omega_psi]
     kf->z_k_data[0] = phi_acc;
     kf->z_k_data[1] = theta_acc;

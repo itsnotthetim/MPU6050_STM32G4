@@ -31,6 +31,7 @@
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
+#include <rclc_parameter/rclc_parameter.h>
 #include <uxr/client/transport.h>
 #include <rmw_microxrcedds_c/config.h>
 #include <rmw_microros/rmw_microros.h>
@@ -43,6 +44,7 @@
 #include <geometry_msgs/msg/twist.h>
 #include <std_msgs/msg/string.h>
 #include <std_srvs/srv/trigger.h>
+#include <std_msgs/msg/int8.h>
 #include <rosidl_runtime_c/string_functions.h>
 #include "math.h"
 //#include "arm_math.h"
@@ -77,6 +79,7 @@ typedef struct{
 }angle_t;
 
 bool is_active = false;
+
 
 
 
@@ -132,22 +135,28 @@ rmw_ret_t mrag_status;
 rcl_publisher_t cmd_vel;
 geometry_msgs__msg__Twist cmdvel_msg;
 
-Kalman_t KX = {
-    .Q_angle = 0.001f,
-    .Q_bias = 0.003f,
-    .R_measure = 0.03f};
-
-Kalman_t KY = {
-    .Q_angle = 0.001f,
-    .Q_bias = 0.003f,
-    .R_measure = 0.03f,
-};
-
+//Kalman_t KX = {
+//    .Q_angle = 0.001f,
+//    .Q_bias = 0.003f,
+//    .R_measure = 0.03f};
+//
+//Kalman_t KY = {
+//    .Q_angle = 0.001f,
+//    .Q_bias = 0.003f,
+//    .R_measure = 0.03f,
+//};
 
 KalmanFilter kf;
 HAL_StatusTypeDef device_status;
 double v_x,v_y;
 uint8_t reset_flag = 0;
+
+rcl_publisher_t blinker_pub;
+std_msgs__msg__Int8 blink_msg;
+
+rcl_publisher_t speedo_pub;
+geometry_msgs__msg__Twist speedo_msg;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -169,6 +178,7 @@ tuple_double_t readImuNonCalibrated();
 void rpfromAccel();
 void rpfromGyro();
 double mapd(double input, double in_min, double in_max, double out_min, double out_max) ;
+double LimitRange(double data, double min, double max);
 
 
 /* USER CODE END PFP */
@@ -217,7 +227,7 @@ int main(void)
 //  KalmanFilter_Init();
 //  KalmanFilter_Init(&kf_roll, 0.01f);
 //  KalmanFilter_Init(&kf_pitch, 0.01f);
-  KalmanFilter_Init(&kf, 0.01);
+  KalmanFilter_Init(&kf, 0.01712); // 58.4 HZ loop
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -310,30 +320,44 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
 				rpfromGyro();
 				RCCHECK(rcl_publish(&mpu6050_publisher, &mpu6050_msg, NULL));
 
-//				v_x = Kalman_getAngle(&KX, accel_angle.roll, data.gx, 0.01);
-//				v_y = Kalman_getAngle(&KY, accel_angle.pitch, data.gy, 0.01);
+//				v_x = Kalman_getAngle(&KX, accel_angle.roll, data.gx, 0.01712 );
+//				v_y = Kalman_getAngle(&KY, accel_angle.pitch, data.gy, 0.01712 );
 
 				KalmanFilter_Update(&kf, accel_angle.roll, accel_angle.pitch, 0, data.gx, data.gy, data.gz);
 
-				linear_x = kf.x_k_data[0];
-				angular_z = - kf.x_k_data[1];
 
-				if((kf.x_k_data[0] >= -0.1) && (kf.x_k_data[0] <= 0.1)){
+				cmdvel_msg.linear.x =  LimitRange(mapd(kf.x_k_data[0], -70.0, 70.0, -40.0, 40.0), -20.0, 20.0);
+				cmdvel_msg.angular.z = mapd(kf.x_k_data[1], -50.0, 50.0, -5.0, 5.0);
+
+				linear_x =  LimitRange(mapd(kf.x_k_data[0], -70.0, 70.0, -40.0, 40.0), -20.0, 20.0);
+				angular_z = mapd(kf.x_k_data[1], -50.0, 50.0, -5.0, 5.0);
+
+				if((kf.x_k_data[0] >= -0.8) && (kf.x_k_data[0] <= 0.8)){
 					linear_x = 0.0;
 				}
-				if((kf.x_k_data[1] >= -0.1) && (kf.x_k_data[1] <= 0.1)){
+				if((kf.x_k_data[1] >= -1.5) && (kf.x_k_data[1] <= 1.5)){
 					angular_z = 0.0;
 				}
 
-
-
-				cmdvel_msg.linear.x =  mapd(linear_x,-60.0,60.0,-5.0,5.0);
-				cmdvel_msg.angular.z = mapd(angular_z,-60.0,60.0,-2.0,2.0);
-
-				cmdvel_msg.angular.x =  v_x;
-				cmdvel_msg.angular.y = v_y;
+				speedo_msg.linear.x = cmdvel_msg.linear.x;
+				speedo_msg.angular.z = cmdvel_msg.angular.z;
 
 				RCCHECK(rcl_publish(&cmd_vel, &cmdvel_msg, NULL));
+				RCCHECK(rcl_publish(&speedo_pub, &speedo_msg, NULL));
+
+				if(accel_angle.pitch > 8.0){
+					blink_msg.data = 1;
+				}
+				else if(accel_angle.pitch < -8.0){
+					blink_msg.data = -1;
+				}
+				else{
+					blink_msg.data = 0;
+				}
+
+				RCCHECK(rcl_publish(&blinker_pub, &blink_msg, NULL))
+
+
 
 			}
 			else{
@@ -467,6 +491,12 @@ double mapd(double input, double in_min, double in_max, double out_min, double o
     return (input - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
+double LimitRange(double data, double min, double max){
+	if(data < min) return min;
+	else if (data > max) return max;
+	return data;
+}
+
 
 void StartDefaultTask(void *argument)
 {
@@ -493,6 +523,8 @@ void StartDefaultTask(void *argument)
   }
 
   allocator = rcl_get_default_allocator();
+
+
 
   //create init_options
   init_options = rcl_get_zero_initialized_init_options();
@@ -524,6 +556,14 @@ void StartDefaultTask(void *argument)
       &cmd_vel, &node,
 	  ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel");
 
+  rclc_publisher_init_default(
+        &speedo_pub, &node,
+  	  ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "speedometer");
+
+  rclc_publisher_init_default(
+        &blinker_pub, &node,
+  	  ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int8), "blinker");
+
   // create service
   rclc_service_init_default(&status_service, &node,
   			ROSIDL_GET_SRV_TYPE_SUPPORT(std_srvs, srv, Trigger)
@@ -538,23 +578,23 @@ void StartDefaultTask(void *argument)
 
 	else{
 		is_calib = true;
-		accel_offset.x = 0.6312768530273459;
-		accel_offset.y = -0.0819649929199216;
-		accel_offset.z = 0.5116870961298351;
+		accel_offset.x = 0.5476135517578122;
+		accel_offset.y = -0.06656717285156218;
+		accel_offset.z = 0.5721982896379518;
 
-		gyro_offset.x = -0.023353091609142815;
-		gyro_offset.y = 0.023326005697926703;
-		gyro_offset.z = 0.005351206132862714;
+		gyro_offset.x = -0.025338463587344946;
+		gyro_offset.y = -0.02339352729066801;
+		gyro_offset.z = 0.0024789404321665745;
 
-		double gyro_cov[9] =  {
-				2.155817054758849e-06, 1.1030785686223727e-07, 1.229854119042769e-08,
-				1.1030785686223727e-07, 2.5384651252082968e-06, 1.7032517411039515e-08,
-				1.229854119042769e-08, 1.7032517411039515e-08, 1.906569917368417e-06
-			};
+		double gyro_cov[9] = {
+		    3.123911124369358e-06, 5.225997040109079e-08, 1.1549529243197505e-07,
+		    5.225997040109079e-08, 3.677361834943486e-06, 4.5560155401682246e-08,
+		    1.1549529243197505e-07, 4.5560155401682246e-08, 2.789920277006955e-06
+		};
 		double acc_cov[9] = {
-		    0.0013081652288234637,  1.0781109688085633e-05,  2.3493748179790447e-05,
-		    1.0781109688085633e-05, 0.0011941322210539112,  4.108841533445584e-05,
-		    2.3493748179790447e-05, 4.108841533445584e-05,  0.004555163865375252
+		    0.001209244523446859, 2.2313204018561076e-05, 7.129883859380973e-05,
+		    2.2313204018561076e-05, 0.0010572480763086421, 7.78056665057966e-05,
+		    7.129883859380973e-05, 7.78056665057966e-05, 0.0038762164205234486
 		};
 
 		for(int i = 0; i < 9; i++){
@@ -569,6 +609,7 @@ void StartDefaultTask(void *argument)
 
   // create message
   mpu6050_msg.header.frame_id = micro_ros_string_utilities_init("imu_frame");
+  blink_msg.data = 0;
 
   // create executor
   executor = rclc_executor_get_zero_initialized_executor();
